@@ -62,6 +62,8 @@ in {
           effectiveBondsCh,
           delegatedTotalsCh,
           pendingUndelegationsCh,
+          epochCh, quarantineCh,
+          guardsAckCh, withdrawCh, withdrawersCh, pendingAfterWithdrawCh,
           setBlockData(`rho:test:block:data:set`),
           blockDataCh
       in {
@@ -95,13 +97,19 @@ in {
                               @PoS!("getEffectiveBonds", *effectiveBondsCh) |
                               @PoS!("getDelegatedTotals", *delegatedTotalsCh) |
                               @PoS!("getPendingUndelegations", *pendingUndelegationsCh) |
+                              @PoS!("getEpochLength", *epochCh) |
+                              @PoS!("getQuarantineLength", *quarantineCh) |
                               for (@selfBonds <- selfBondsCh &
                                    @effectiveBonds <- effectiveBondsCh &
                                    @delegatedTotals <- delegatedTotalsCh &
-                                   @pendingUndelegations <- pendingUndelegationsCh) {
+                                   @pendingUndelegations <- pendingUndelegationsCh &
+                                   @epochLength <- epochCh &
+                                   @quarantineLength <- quarantineCh) {
                                 rhoSpec!("assertMany",
                                   [
                                     ((2n, "==", minimumBond), "minimum bond getter exposes genesis parameter"),
+                                    ((10, "==", epochLength), "test epoch length is ten blocks"),
+                                    ((15, "==", quarantineLength), "test quarantine is not a whole number of epochs"),
                                     (("Delegation amount must be a BigInt.", "==", invalidDelegateMsg), "Int delegation is rejected"),
                                     (("Undelegation amount must be a BigInt.", "==", invalidUndelegateMsg), "Int undelegation is rejected"),
                                     (("Delegation is less than minimum.", "==", dustMsg), "delegation below minimumBond is rejected"),
@@ -110,10 +118,27 @@ in {
                                     ((validatorBond, "==", selfBonds.get(validatorPubKey)), "self-bond stays unchanged"),
                                     ((delegationAmt - undelegationAmt, "==", delegatedTotals.getOrElse(validatorPubKey, 0n)), "delegated total reflects the active remainder"),
                                     (((validatorBond + delegationAmt) - undelegationAmt, "==", effectiveBonds.get(validatorPubKey)), "effective bond reflects self plus active delegated remainder"),
-                                    ((true, "==", pendingUndelegations.getOrElse(delegatorPubKey, {}).contains(validatorPubKey)), "first undelegation remains pending")
+                                    (((undelegationAmt, 40), "==", pendingUndelegations.getOrElse(delegatorPubKey, {}).get(validatorPubKey)), "delegation escrow covers the rounded validator payout block")
                                   ],
-                                  *ackCh
-                                )
+                                  *guardsAckCh
+                                ) |
+                                for (_ <- guardsAckCh) {
+                                  @PoS!("withdraw", validatorDeployerId, *withdrawCh) |
+                                  for (@(true, _) <- withdrawCh) {
+                                    @PoS!("getPendingWithdrawer", *withdrawersCh) |
+                                    @PoS!("getPendingUndelegations", *pendingAfterWithdrawCh) |
+                                    for (@withdrawers <- withdrawersCh &
+                                         @pendingAfterWithdraw <- pendingAfterWithdrawCh) {
+                                      rhoSpec!("assertMany",
+                                        [
+                                          ((35, "==", withdrawers.get(validatorPubKey)), "validator quarantine keeps the dev policy"),
+                                          (((delegationAmt, 40), "==", pendingAfterWithdraw.get(delegatorPubKey).get(validatorPubKey)), "withdraw combines pending principal at the rounded payout block")
+                                        ],
+                                        *ackCh
+                                      )
+                                    }
+                                  }
+                                }
                               }
                             }
                           }

@@ -29,6 +29,7 @@ use rspace_plus_plus::rspace::hashing::blake2b256_hash::Blake2b256Hash;
 use rspace_plus_plus::rspace::state::exporters::rspace_exporter_items::RSpaceExporterItems;
 use rspace_plus_plus::rspace::state::instances::rspace_exporter_store::RSpaceExporterStore;
 use rspace_plus_plus::rspace::state::rspace_exporter::RSpaceExporter;
+use shared::rust::shared::f1r3fly_events::F1r3flyEvent;
 use shared::rust::ByteVector;
 use tokio::sync::mpsc;
 
@@ -44,10 +45,23 @@ impl InitializingSpec {
     }
 
     fn after_each(fixture: &TestFixture) { fixture.transport_layer.reset(); }
-    async fn make_transition_to_running_once_approved_block_received() {
+    async fn handle_approved_block(metadata_field: Option<&str>) {
         let _event_bus = shared::rust::shared::f1r3fly_events::F1r3flyEvents::new();
 
-        let fixture = TestFixture::new().await;
+        let mut fixture = TestFixture::new().await;
+        match metadata_field {
+            Some("name") => fixture
+                .casper_shard_conf
+                .native_token_name
+                .push_str("-mismatch"),
+            Some("symbol") => fixture
+                .casper_shard_conf
+                .native_token_symbol
+                .push_str("-mismatch"),
+            Some("decimals") => fixture.casper_shard_conf.native_token_decimals += 1,
+            None => {}
+            Some(field) => panic!("Unexpected metadata field: {field}"),
+        }
 
         Self::before_each(&fixture);
 
@@ -290,6 +304,43 @@ impl InitializingSpec {
 
             let engine = engine_cell.get().await;
 
+            if let Some(field) = metadata_field {
+                assert!(
+                    engine.with_casper().is_none(),
+                    "Mismatched token metadata must not install a Running engine"
+                );
+                let startup_events = fixture.event_publisher.startup_buffer();
+                assert!(
+                    !startup_events
+                        .lock()
+                        .unwrap()
+                        .as_ref()
+                        .unwrap()
+                        .iter()
+                        .any(|event| matches!(event, F1r3flyEvent::EnteredRunningState(_))),
+                    "Mismatched token metadata must not publish readiness"
+                );
+                assert!(fixture.block_store.get_approved_block().unwrap().is_none());
+                assert!(fixture.last_approved_block.lock().unwrap().is_none());
+                let error =
+                    casper::rust::util::token_metadata_check::verify_token_metadata_matches_config(
+                        &fixture.runtime_manager,
+                        &approved_block.candidate.block.body.state.post_state_hash,
+                        &fixture.casper_shard_conf.native_token_name,
+                        &fixture.casper_shard_conf.native_token_symbol,
+                        fixture.casper_shard_conf.native_token_decimals,
+                    )
+                    .await
+                    .expect_err("The restored state must reject the mismatched metadata");
+                assert!(
+                    error
+                        .to_string()
+                        .contains(&format!("native-token-{field}:")),
+                    "Expected a mismatch of {field}, got {error}"
+                );
+                return;
+            }
+
             let casper_defined = engine.with_casper().is_some();
             assert!(
                 casper_defined,
@@ -456,7 +507,22 @@ async fn create_initializing_engine_with_dag(
 
 #[tokio::test]
 async fn make_transition_to_running_once_approved_block_received() {
-    InitializingSpec::make_transition_to_running_once_approved_block_received().await;
+    InitializingSpec::handle_approved_block(None).await;
+}
+
+#[tokio::test]
+async fn reject_mismatched_token_name_before_running() {
+    InitializingSpec::handle_approved_block(Some("name")).await;
+}
+
+#[tokio::test]
+async fn reject_mismatched_token_symbol_before_running() {
+    InitializingSpec::handle_approved_block(Some("symbol")).await;
+}
+
+#[tokio::test]
+async fn reject_mismatched_token_decimals_before_running() {
+    InitializingSpec::handle_approved_block(Some("decimals")).await;
 }
 
 /// Test that verifies the fix for the race condition where a slow validator

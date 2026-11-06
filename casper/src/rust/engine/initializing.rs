@@ -1693,6 +1693,15 @@ impl<T: TransportLayer + Send + Sync + Clone> Initializing<T> {
         let ab = approved_block.candidate.block.clone();
         let genesis_post_state_hash = ab.body.state.post_state_hash.clone();
 
+        crate::rust::util::token_metadata_check::verify_token_metadata_matches_config(
+            &self.runtime_manager,
+            &genesis_post_state_hash,
+            &self.casper_shard_conf.native_token_name,
+            &self.casper_shard_conf.native_token_symbol,
+            self.casper_shard_conf.native_token_decimals,
+        )
+        .await?;
+
         // RuntimeManager is lock-free Arc<RuntimeManager>; clone the Arc.
         let runtime_manager = self.runtime_manager.clone();
 
@@ -1873,19 +1882,6 @@ impl<T: TransportLayer + Send + Sync + Clone> Initializing<T> {
         tracing::info!(
             "create_casper_and_transition_to_running: transition_to_running completed successfully"
         );
-
-        // Guard joiners (first-time connections requesting an approved block from
-        // peers) against config drift: the node's local native-token-* values
-        // must match what this network baked into the TokenMetadata contract at
-        // genesis. See casper/src/rust/util/token_metadata_check.rs for details.
-        crate::rust::util::token_metadata_check::verify_token_metadata_matches_config(
-            &self.runtime_manager,
-            &genesis_post_state_hash,
-            &self.casper_shard_conf.native_token_name,
-            &self.casper_shard_conf.native_token_symbol,
-            self.casper_shard_conf.native_token_decimals,
-        )
-        .await?;
 
         self.transport_layer
             .send_fork_choice_tip_request(&self.connections_cell, &self.rp_conf_ask)

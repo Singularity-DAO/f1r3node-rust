@@ -916,7 +916,7 @@ in {
                                           state
                                             .get("pendingUndelegations")
                                             .getOrElse(delegatorPk, {})
-                                            .set(validatorPk, (amount, blockNumber + $$epochLength$$))
+                                            .set(validatorPk, (amount, $$epochLength$$ * (1 + blockNumber / $$epochLength$$ + ($$quarantineLength$$ + $$epochLength$$ - 1) / $$epochLength$$)))
                                         )
                                     ),
                                   (true, Nil)
@@ -1052,7 +1052,7 @@ in {
                        @blockNumber, _, _ <- blockDataCh) {
                     if (state.get("allBonds").getOrElse(userPk, 0n) > 0n) {
                       new movedDelegationsCh in {
-                        moveDelegationsToPendingUndelegations!(state, userPk, blockNumber + $$epochLength$$, *movedDelegationsCh) |
+                        moveDelegationsToPendingUndelegations!(state, userPk, $$epochLength$$ * (1 + blockNumber / $$epochLength$$ + ($$quarantineLength$$ + $$epochLength$$ - 1) / $$epochLength$$), *movedDelegationsCh) |
                         for (@(updatedDelegations, updatedPendingUndelegations, movedAmount) <- movedDelegationsCh) {
                           if (movedAmount != state.get("delegatedTotals").getOrElse(userPk, 0n)) {
                             resultCh!(state, (false, "Delegated total mismatch."))

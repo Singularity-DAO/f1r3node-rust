@@ -95,7 +95,7 @@ See the [economic pipeline design](../designs/pr54-bigint-economic-pipeline.md) 
     - removes `amount` from active delegation immediately
     - decrements `delegations[delegatorPk][validatorPk]`
     - decrements `delegatedTotals[validatorPk]`
-    - creates `pendingUndelegations[delegatorPk][validatorPk] = (amount, blockNumber + epochLength)`
+    - creates `pendingUndelegations[delegatorPk][validatorPk] = (amount, unlockBlock)`, with the unlock at the validator payout boundary described below
     - pending principal stops contributing to future effective stake, but remains slashable until completion
 
 - `PoS("completeUndelegate", deployerId, validatorPk, returnCh)`
@@ -118,13 +118,13 @@ See the [economic pipeline design](../designs/pr54-bigint-economic-pipeline.md) 
   - Preconditions:
     - deployer is a bonded validator
   - Effects:
-    - converts every active delegation to this validator into pending undelegation with unlock block `blockNumber + epochLength`
+    - converts every active delegation to this validator into pending undelegation with unlock at the validator payout boundary
     - merges with an existing pending undelegation for the same `(delegator, validator)` by adding the amount and keeping the later unlock block
     - refuses with `Delegated total mismatch.` if the moved active delegation sum does not match `delegatedTotals[validatorPk]`
     - clears `delegatedTotals[validatorPk]`
     - records the validator in `pendingWithdrawers`
   - Consequence:
-    - if a delegator already has an unlocked but unclaimed pending undelegation for this validator, validator withdrawal can extend the merged claim by up to `epochLength`, and the merged amount remains slashable until completion
+    - if a delegator already has an unlocked but unclaimed pending undelegation for this validator, validator withdrawal extends the merged claim to the validator payout boundary, and the merged amount remains slashable until completion
 
 ## Wallet SDK Integration (Reference)
 
@@ -318,6 +318,12 @@ Rust runtime on-chain bond queries now call `getEffectiveBonds`, so consensus st
 
 `PoS("undelegate", ...)` no longer transfers principal immediately.
 
+For a request at block `b`, let `E = epochLength` and `Q = quarantineLength`.
+The unlock block is `E * (1 + floor(b / E) + ceil(Q / E))`. This is the first
+epoch boundary at or after the validator quarantine ends. For example, with
+`E = 10` and `Q = 15`, a request at block 10 unlocks at block 40. Clients must
+read the recorded `unlockBlock` before completing a withdrawal.
+
 - request step: removes active delegation stake and creates pending undelegation with unlock block
 - pending step: principal is unlocking, excluded from future effective stake, and still slashable escrow
 - completion step: `PoS("completeUndelegate", ...)` transfers principal only after cooldown
@@ -328,7 +334,7 @@ Rust runtime on-chain bond queries now call `getEffectiveBonds`, so consensus st
 `PoS("withdraw", ...)` no longer rejects only because delegated stake exists:
 
 - active delegations to the withdrawing validator are converted to pending undelegations
-- pending undelegations use the same `epochLength` cooldown as delegator-requested undelegation
+- pending undelegations use the same validator payout boundary as delegator-requested undelegation
 - validator self-bond still follows the existing pending-withdrawer and quarantine flow
 
 ### Slash
@@ -364,7 +370,7 @@ Expected invariants for valid state transitions:
 
 ## Current Limitations
 
-1. Cooldown duration is fixed to `epochLength` (no separate undelegation-parameter yet).
+1. Cooldown follows `epochLength` and `quarantineLength`; there is no separate undelegation parameter.
 2. Only one pending undelegation per `(delegator, validator)` pair is allowed at a time.
 3. `getDelegatorRewards` intentionally remains a flattened compatibility view; validator attribution is internal slash accounting state.
 4. `maximumBond` is enforced as an effective stake cap (`self + active delegated`), not just self-bond.

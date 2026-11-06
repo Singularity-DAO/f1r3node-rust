@@ -50,6 +50,8 @@ fn pos_delegation_review_spec() {
                         prepare_vault(DELEGATOR_PK, 10_000_000_000_000_000_000_000),
                     ]);
                     genesis_parameters.2.proof_of_stake.minimum_bond = 2.into();
+                    genesis_parameters.2.proof_of_stake.epoch_length = 10;
+                    genesis_parameters.2.proof_of_stake.quarantine_length = 15;
                     genesis_parameters.2.proof_of_stake.maximum_bond =
                         "100000000000000000000000".parse().unwrap();
 
